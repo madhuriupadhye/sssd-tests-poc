@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from lib.multihost import KnownTopology, KnownTopologyGroup, Multihost, Topology, TopologyDomain
+from lib.multihost import KnownTopology, Multihost, Topology, TopologyDomain
 from lib.multihost.roles import AD, IPA, LDAP, Client, GenericADProvider, GenericProvider, Samba
 
 
@@ -254,7 +254,6 @@ def test_sudo(client: Client, provider: LDAP):
 
 @pytest.mark.topology(KnownTopology.Samba)
 def test_samba_ou(client: Client, samba: Samba):
-    print(samba.ldap.naming_context)
     samba.ou('test').add()
     samba.sudorule('testrule').add(user='ALL', host='ALL', command='/bin/ls')
 

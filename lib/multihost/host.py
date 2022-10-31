@@ -33,9 +33,7 @@ class BaseHost(object):
         self.host: pytest_multihost_Host = host
         self.role: str = self.host.role
         self.hostname: str = self.host.external_hostname
-        self.domain = self.hostname.split('.', maxsplit=1)[1]
         self.config: dict[str, any] = config
-
         self.test_dir = self.host.test_dir
 
     @classmethod
@@ -117,6 +115,18 @@ class BaseHost(object):
             'ip': self.host.ip,
             'config': self.config,
         }
+
+    def backup(self) -> None:
+        """
+        Backup host.
+        """
+        pass
+
+    def restore(self) -> None:
+        """
+        Restore host to its original state.
+        """
+        pass
 
     def exec(
         self,
@@ -262,6 +272,14 @@ class ProviderHost(BaseHost):
 
         return self.__conn
 
+    def disconnect(self) -> None:
+        """
+        Disconnect LDAP connection.
+        """
+        if self.__conn is not None:
+            self.__conn.unbind()
+            self.__conn = None
+
     @property
     def naming_context(self) -> str:
         """
@@ -383,6 +401,7 @@ class LDAPHost(ProviderHost):
 
         return result
 
+
 class IPAHost(ProviderHost):
     """
     IPA host object.
@@ -399,7 +418,6 @@ class IPAHost(ProviderHost):
         self.client.setdefault('id_provider', 'ipa')
         self.client.setdefault('access_provider', 'ipa')
         self.client.setdefault('ipa_server', self.hostname)
-        self.client.setdefault('ipa_domain', self.domain)
         self.client.setdefault('dyndns_update', False)
 
         # Backup of original data
@@ -452,7 +470,6 @@ class SambaHost(ProviderHost):
         self.client.setdefault('id_provider', 'ad')
         self.client.setdefault('access_provider', 'ad')
         self.client.setdefault('ad_server', self.hostname)
-        self.client.setdefault('ad_domain', self.domain)
         self.client.setdefault('dyndns_update', False)
 
         # Backup of original data
@@ -490,6 +507,8 @@ class SambaHost(ProviderHost):
         if self.__backup is None:
             return
 
+        self.disconnect()
+
         self.exec('''
             set -e
             systemctl stop samba
@@ -497,7 +516,12 @@ class SambaHost(ProviderHost):
             cp -r /var/lib/samba.bak /var/lib/samba
             systemctl start samba
             samba-tool ntacl sysvolreset
+
+            # systemctl finishes before samba is fully started, wait for it to start listening on ldap port
+            timeout 5s bash -c 'until netstat -ltp | grep :ldap &> /dev/null; do :; done'
         ''')
+
+        self.disconnect()
 
 
 class ADHost(ProviderHost):
@@ -525,7 +549,6 @@ class ADHost(ProviderHost):
         self.client.setdefault('id_provider', 'ad')
         self.client.setdefault('access_provider', 'ad')
         self.client.setdefault('ad_server', self.hostname)
-        self.client.setdefault('ad_domain', self.domain)
         self.client.setdefault('dyndns_update', False)
 
         # Backup of original data
@@ -634,6 +657,9 @@ class ADHost(ProviderHost):
 
         return self.__naming_context
 
+    def disconnect(self) -> None:
+        return
+
     def backup(self) -> None:
         """
         Perform limited backup of the domain controller data. Currently only
@@ -676,4 +702,44 @@ class ADHost(ProviderHost):
                 }}
             }}
         }}
+        ''')
+
+
+class NFSHost(BaseHost):
+    """
+    NFS server host object.
+
+    Provides NFS service management.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.exports_dir = self.config.get('exports_dir', '/exports').rstrip('/')
+
+        # Backup of original data
+        self.__backup: bool = False
+
+    def backup(self) -> None:
+        """
+        Backup NFS server.
+        """
+        if self.__backup:
+            return
+
+        self.exec(fr'''
+        tar --ignore-failed-read -czvf /tmp/mh.nfs.backup.tgz "{self.exports_dir}" /etc/exports /etc/exports.d
+        ''')
+
+        self.__backup = True
+
+    def restore(self) -> None:
+        """
+        Restore NFS server to its initial contents.
+        """
+
+        self.exec(fr'''
+        rm -fr "{self.exports_dir}/*"
+        rm -fr /etc/exports.d/*
+        tar -xf /tmp/mh.nfs.backup.tgz -C /
+        exportfs -r
         ''')
