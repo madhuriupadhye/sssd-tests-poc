@@ -127,6 +127,17 @@ class LDAP(LinuxRole):
 
         return LDAPSudoRule(self, name, basedn)
 
+    def aci(self, aci_name: str) -> LDAPAddACI:
+        """
+        Get organizational unit object.
+
+        :param aci_name: Unit name.
+        :type aci_name: str
+        :return: Add ACI for top entry.
+        :rtype: LDAPAddACI
+        """
+        return LDAPAddACI(self, aci_name)
+
 
 class LDAPObject(BaseObject):
     def __init__(
@@ -301,6 +312,39 @@ class LDAPOrganizationalUnit(LDAPObject):
 
         self._add(attrs)
         return self
+
+
+class LDAPACI(LDAPObject):
+    """
+    Add LDAP ACI.
+    """
+
+    def __init__(self, role: LDAP) -> None:
+        """
+        :param role: LDAP role object.
+        :type role: LDAP
+        """
+        super().__init__(role)
+
+    def add(self, aci) -> LDAPACI:
+        """
+        Create new ACI entry.
+
+        :return: Self.
+        :rtype: LDAPACI
+        """
+        self.role.ldap.aci.add('(targetattr="dc || description || objectClass")(targetfilter="(objectClass=domain)")(version 3.0; acl "Enable anyone domain read"; allow (read, search, compare)(userdn="ldap:///anyone");)')
+        return self
+    
+    def delete(self, aci) -> LDAPACI:
+	"""
+	Delete the ACI entry.
+
+	:return: Self.
+	:rtype: LDAPACI
+	"""
+	self.role.ldap.aci.add('(targetattr="dc || description || objectClass")(targetfilter="(objectClass=domain)")(version 3.0; acl "Enable anyone domain read"; allow (read, search, compare)(userdn="ldap:///anyone");)')	
+	return self
 
 
 class LDAPUser(LDAPObject):
