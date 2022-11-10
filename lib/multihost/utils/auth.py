@@ -165,6 +165,66 @@ class HostSSH(AuthBase):
 
         return rc == 0
 
+    def password_expire(self, username: str, password: str, new_password: str) -> bool:
+        """
+        SSH to the remote host and after authenticate change the user's with password.
+
+        :param username: User name.
+        :type name: str
+        :param password: User password.
+        :type password: str
+        :param new_password: new password of the user
+        :type new_password: str
+        :return: True if authentication was successful, False otherwise.
+        :rtype: bool
+        """
+        rc = self._expect(rf"""
+            # It takes some time to get authentication failure
+            set timeout 10
+            set prompt "\n.*\[#\$>\] $"
+
+            spawn ssh {self.opts} \
+                -o PreferredAuthentications=password \
+                -o NumberOfPasswordPrompts=1 \
+                -l "{username}" localhost
+
+            expect {{
+                "Password:" {{send "{password}\n"}}
+                timeout {{puts "expect result: Unexpected su output"; exit 1}}
+                eof {{puts "expect result: Unexpected end of file"; exit 2}}
+            }}
+
+            expect {{
+                "Current password:" {{send "{password}\n"}}
+                timeout {{puts "expect result: Unexpected su output"; exit 1}}
+                eof {{puts "expect result: Unexpected end of file"; exit 2}}
+            }}
+
+            expect {{
+                "*New password:" {{send "{new_password}\n"}}
+                timeout {{puts "expect result: Unexpected su output"; exit 1}}
+                eof {{puts "expect result: Unexpected end of file"; exit 2}}
+            }}
+
+            expect {{
+                "*Retype new password:" {{send "{new_password}\n"}}
+                timeout {{puts "expect result: Unexpected su output"; exit 1}}
+                eof {{puts "expect result: Unexpected end of file"; exit 2}}
+            }}
+
+            expect {{
+                -re $prompt {{puts "expect result: Password authentication successful"; exit 0}}
+                "{username}@localhost: Permission denied" {{puts "expect result: Authentication failure"; exit 4}}
+                timeout {{puts "expect result: Unexpected su output"; exit 1}}
+                eof {{puts "expect result: Unexpected end of file"; exit 2}}
+            }}
+
+            puts "expect result: Unexpected code path"
+            exit 3
+        """)
+
+        return rc == 0
+
 
 class HostSudo(AuthBase):
     """
