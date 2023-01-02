@@ -364,7 +364,9 @@ class LDAPUser(LDAPObject):
         shadowMin: int | None = None,
         shadowMax: int | None = None,
         shadowWarning: int | None = None,
-        shadowLastChange: int | None = None
+        shadowLastChange: int | None = None,
+        host: str | None = None,
+        description: str | None = None
     ) -> LDAPUser:
         """
         Create new LDAP user.
@@ -392,6 +394,10 @@ class LDAPUser(LDAPObject):
         :type shadowWarning: int | None, optional
         :param shadowLastChange: shadowlastchage LDAP attribute, defaults to None
         :type shadowLastChange: int | None, optional
+        :param host: host LDAP attribute, defaults to None 
+        :type host: str | None, otional
+        :param description: description LDAP attribute, defaults to None
+        :type description: str | None, optional
         :return: Self.
         :rtype: LDAPUser
         """
@@ -417,6 +423,8 @@ class LDAPUser(LDAPObject):
             'shadowMax': shadowMax,
             'shadowWarning': shadowWarning,
             'shadowLastChange': shadowLastChange,
+            'host': host,
+            'description': description,
         }
 
         if self._remove_none_from_list([shadowMin, shadowMax, shadowWarning, shadowLastChange]):
@@ -438,6 +446,8 @@ class LDAPUser(LDAPObject):
         shadowMax: int | LDAP.Flags | None = None,
         shadowWarning: int | LDAP.Flags | None = None,
         shadowLastChange: int | LDAP.Flags | None = None,
+        host: str | LDAP.Flags | None = None,
+        description: str | LDAP.Flags | None = None,
     ) -> LDAPUser:
         """
         Modify existing LDAP user.
@@ -463,6 +473,10 @@ class LDAPUser(LDAPObject):
         :type shadowWarning: int | LDAP.Flags | None, optional
         :param shadowLastChange: shadowlastchage LDAP attribute, defaults to None
         :type shadowLastChange: int | LDAP.Flags | None, optional
+        :param host: host LDAP attribute, defaults to None
+        :type host: str | LDAP.Flags | None, optional
+        :param description: description LDAP attribute, defaults to None
+        :type description: str | LDAP.Flags | None, optional
         :return: Self.
         :rtype: LDAPUser
         """
@@ -477,6 +491,8 @@ class LDAPUser(LDAPObject):
             'shadowMax': shadowMax,
             'shadowWarning': shadowWarning,
             'shadowLastChange': shadowLastChange,
+            'host': host,
+            'description': description,
         }
 
         self._set(attrs)
