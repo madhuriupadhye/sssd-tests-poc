@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from enum import Enum
+from typing import TYPE_CHECKING, Any
 
 import ldap
 import ldap.ldapobject
@@ -8,12 +9,13 @@ import ldap.ldapobject
 from ..host import LDAPHost
 from ..utils.ldap import HostLDAP
 from .base import BaseObject, LinuxRole
+from .nfs import NFSExport
 
 if TYPE_CHECKING:
     from ..multihost import Multihost
 
 
-class LDAP(LinuxRole):
+class LDAP(LinuxRole[LDAPHost]):
     """
     LDAP service management.
     """
@@ -26,23 +28,15 @@ class LDAP(LinuxRole):
         self.auto_gid: int = 33000
         self.auto_ou: dict[str, bool] = {}
 
-    def setup(self) -> None:
+        self.aci: LDAPACI = LDAPACI(self)
         """
-        Setup LDAP role.
+        Provides API to manipulate naming context ACI records.
+        """
 
-        #. backup LDAP data
+        self.automount: LDAPAutomount = LDAPAutomount(self)
         """
-        super().setup()
-        self.host.backup()
-
-    def teardown(self) -> None:
+        Provides API to manipulate automount objects.
         """
-        Teardown LDAP role.
-
-        #. restore original LDAP data
-        """
-        self.host.restore()
-        super().teardown()
 
     def _generate_uid(self) -> int:
         """
@@ -175,10 +169,10 @@ class LDAPObject(BaseObject):
 
         return self.role.ldap.dn(rdn, basedn)
 
-    def _default(self, value: any, default: any) -> any:
+    def _default(self, value: Any, default: Any) -> Any:
         """
         :return: Value if not None, default value otherwise.
-        :rtype: any
+        :rtype: Any
         """
         if value is None:
             return default
@@ -208,13 +202,13 @@ class LDAPObject(BaseObject):
     def _modify(
         self,
         *,
-        add: dict[str, any | list[any] | None] = dict(),
-        replace: dict[str, any | list[any] | None] = dict(),
-        delete: dict[str, any | list[any] | None] = dict()
+        add: dict[str, Any | list[Any] | None] = dict(),
+        replace: dict[str, Any | list[Any] | None] = dict(),
+        delete: dict[str, Any | list[Any] | None] = dict()
     ) -> None:
         self.role.ldap.modify(self.dn, add=add, replace=replace, delete=delete)
 
-    def _set(self, attrs: dict[str, any]) -> None:
+    def _set(self, attrs: dict[str, Any]) -> None:
         replace = {}
         delete = {}
         for attr, value in attrs.items():
@@ -263,6 +257,51 @@ class LDAPObject(BaseObject):
         return {k: [i.decode('utf-8') for i in v] for k, v in attrs.items()}
 
 
+class LDAPACI(object):
+    """
+    LDAP ACI records management.
+    """
+
+    def __init__(self, role: LDAP) -> None:
+        """
+        :param role: LDAP role object.
+        :type role: LDAP
+        """
+        self.role: LDAP = role
+        self.ldap: HostLDAP = self.role.ldap
+        self.dn: str = self.ldap.naming_context
+
+    def add(self, value: str):
+        """
+        Add new ACI record.
+
+        :param value: ACI value
+        :type value: str
+        """
+        self.ldap.modify(self.dn, add={'aci': value})
+
+    def modify(self, old: str, new: str):
+        """
+        Modify existing ACI record.
+
+        :param old: Old ACI value
+        :type old: str
+        :param new: New ACI value
+        :type new: str
+        """
+        self.delete(old)
+        self.add(new)
+
+    def delete(self, value: str):
+        """
+        Delete existing ACI record.
+
+        :param value: ACI value
+        :type value: str
+        """
+        self.ldap.modify(self.dn, delete={'aci': value})
+
+
 class LDAPOrganizationalUnit(LDAPObject):
     """
     LDAP organizational unit management.
@@ -288,7 +327,7 @@ class LDAPOrganizationalUnit(LDAPObject):
         :rtype: LDAPOrganizationalUnit
         """
         attrs = {
-            'objectClass': 'organizationalUnit',
+            'objectclass': 'organizationalUnit',
             'ou': self.name
         }
 
@@ -321,7 +360,12 @@ class LDAPUser(LDAPObject):
         password: str | None = 'Secret123',
         home: str | None = None,
         gecos: str | None = None,
-        shell: str | None = None
+        shell: str | None = None,
+        shadowMin: int | None = None,
+        shadowMax: int | None = None,
+        shadowWarning: int | None = None,
+        shadowLastchange: int | None = None,
+        passkey: str | None = None
     ) -> LDAPUser:
         """
         Create new LDAP user.
@@ -341,6 +385,16 @@ class LDAPUser(LDAPObject):
         :type gecos: str | None, optional
         :param shell: Login shell, defaults to None
         :type shell: str | None, optional
+        :param shadowMin: shadowmin LDAP attribute, defaults to None
+        :type shadowMin: int | None, optional
+        :param shadowMax: shadowmax LDAP attribute, defaults to None
+        :type shadowMax: int | None, optional
+        :param shadowWarning: shadowwarning LDAP attribute, defaults to None
+        :type shadowWarning: int | None, optional
+        :param shadowLastchange: shadowlastchage LDAP attribute, defaults to None
+        :type shadowLastchange: int | None, optional
+        :param passkey: passkey mapping string LDAP attribute, defaults to None
+        :type passkey: str | None, optional
         :return: Self.
         :rtype: LDAPUser
         """
@@ -353,7 +407,7 @@ class LDAPUser(LDAPObject):
             gid = uid
 
         attrs = {
-            'objectClass': 'posixAccount',
+            'objectclass': ['posixAccount'],
             'cn': self.name,
             'uid': self.name,
             'uidNumber': uid,
@@ -362,7 +416,18 @@ class LDAPUser(LDAPObject):
             'userPassword': self._hash_password(password),
             'gecos': gecos,
             'loginShell': shell,
+            'shadowMin': shadowMin,
+            'shadowMax': shadowMax,
+            'shadowWarning': shadowWarning,
+            'shadowLastchange': shadowLastchange,
+            'passkey': passkey,
         }
+
+        if self._remove_none_from_list([shadowMin, shadowMax, shadowWarning, shadowLastchange]):
+            attrs['objectclass'].append("shadowAccount")
+
+        if self._remove_none_from_list([passkey]):
+            attrs['objectclass'].append("passkeyUser")
 
         self._add(attrs)
         return self
@@ -376,6 +441,11 @@ class LDAPUser(LDAPObject):
         home: str | LDAP.Flags | None = None,
         gecos: str | LDAP.Flags | None = None,
         shell: str | LDAP.Flags | None = None,
+        shadowMin: int | LDAP.Flags | None = None,
+        shadowMax: int | LDAP.Flags | None = None,
+        shadowWarning: int | LDAP.Flags | None = None,
+        shadowLastchange: int | LDAP.Flags | None = None,
+        passkey: str | LDAP.Flags | None = None,
     ) -> LDAPUser:
         """
         Modify existing LDAP user.
@@ -393,6 +463,16 @@ class LDAPUser(LDAPObject):
         :type gecos: str | LDAP.Flags | None, optional
         :param shell: Login shell, defaults to None
         :type shell: str | LDAP.Flags | None, optional
+        :param shadowMin: shadowmin LDAP attribute, defaults to None
+        :type shadowMin: int | LDAP.Flags | None, optional
+        :param shadowMax: shadowmax LDAP attribute, defaults to None
+        :type shadowMax: int | LDAP.Flags | None, optional
+        :param shadowWarning: shadowwarning LDAP attribute, defaults to None
+        :type shadowWarning: int | LDAP.Flags | None, optional
+        :param shadowLastchange: shadowlastchage LDAP attribute, defaults to None
+        :type shadowLastchange: int | LDAP.Flags | None, optional
+        :param passkey: passkey mapping string, LDAP attribute, defaults to None
+        :type passkey: str | LDAP.Flags | None, optional
         :return: Self.
         :rtype: LDAPUser
         """
@@ -403,6 +483,11 @@ class LDAPUser(LDAPObject):
             'userPassword': self._hash_password(password),
             'gecos': gecos,
             'loginShell': shell,
+            'shadowMin': shadowMin,
+            'shadowMax': shadowMax,
+            'shadowWarning': shadowWarning,
+            'shadowLastchange': shadowLastchange,
+            'passkey': passkey,
         }
 
         self._set(attrs)
@@ -483,7 +568,7 @@ class LDAPGroup(LDAPObject):
             gid = self.role._generate_gid()
 
         attrs = {
-            'objectClass': self.object_class,
+            'objectclass': self.object_class,
             'cn': self.name,
             'gidNumber': gid,
             'userPassword': self._hash_password(password),
@@ -639,7 +724,7 @@ class LDAPSudoRule(LDAPObject):
         :rtype: LDAPSudoRule
         """
         attrs = {
-            'objectClass': 'sudoRole',
+            'objectclass': 'sudoRole',
             'cn': self.name,
             'sudoUser': self.__sudo_user(user),
             'sudoHost': host,
@@ -706,7 +791,7 @@ class LDAPSudoRule(LDAPObject):
         :rtype: LDAPSudoRule
         """
         attrs = {
-            'objectClass': 'sudoRole',
+            'objectclass': 'sudoRole',
             'cn': self.name,
             'sudoUser': self.__sudo_user(user),
             'sudoHost': host,
@@ -788,3 +873,269 @@ class LDAPSudoRule(LDAPObject):
             out.append(_get_value(value))
 
         return out
+
+
+class LDAPAutomount(object):
+    """
+    LDAP automount management.
+    """
+
+    class Schema(Enum):
+        '''
+        LDAP automount schema.
+        '''
+
+        RFC2307 = 'rfc2307',
+        RFC2307bis = 'rfc2307bis',
+        AD = 'ad',
+
+    def __init__(self, role: LDAP) -> None:
+        """
+        :param role: LDAP role object.
+        :type role: LDAP
+        """
+        self.__role = role
+        self.__schema = self.Schema.RFC2307
+
+    def map(self, name: str, basedn: LDAPObject | str | None = 'ou=autofs') -> LDAPAutomountMap:
+        """
+        Get automount map object.
+
+        :param name: Automount map name.
+        :type name: str
+        :param basedn: Base dn, defaults to ``ou=autofs``
+        :type basedn: LDAPObject | str | None, optional
+        :return: New automount map object.
+        :rtype: LDAPAutomountMap
+        """
+        return LDAPAutomountMap(self.__role, name, basedn, schema=self.__schema)
+
+    def key(self, name: str, map: LDAPAutomountMap) -> LDAPAutomountKey:
+        """
+        Get automount key object.
+
+        :param name: Automount key name.
+        :type name: str
+        :param map: Automount map that is a parent to this key.
+        :type map: LDAPAutomountMap
+        :return: New automount key object.
+        :rtype: LDAPAutomountKey
+        """
+        return LDAPAutomountKey(self.__role, name, map, schema=self.__schema)
+
+    def set_schema(self, schema: 'LDAPAutomount.Schema'):
+        self.__schema = schema
+
+
+class LDAPAutomountMap(LDAPObject):
+    """
+    LDAP automount map management.
+    """
+
+    def __init__(
+        self,
+        role: LDAP,
+        name: str,
+        basedn: LDAPObject | str | None = 'ou=autofs',
+        *,
+        schema: LDAPAutomount.Schema = LDAPAutomount.Schema.RFC2307
+    ) -> None:
+        """
+        :param role: LDAP role object.
+        :type role: LDAP
+        :param name: Automount map name.
+        :type name: str
+        :param basedn: Base dn, defaults to ``ou=autofs``
+        :type basedn: LDAPObject | str | None, optional
+        :param schema: LDAP Automount schema, defaults to ``LDAPAutomount.Schema.RFC2307``
+        :type schema: LDAPAutomount.Schema
+        """
+        self.__schema = schema
+        self.__attrs = self.__get_attrs_map(schema)
+        super().__init__(role, f'{self.__attrs["rdn"]}={name}', basedn, default_ou='autofs')
+        self.name = name
+
+    def __get_attrs_map(self, schema: LDAPAutomount.Schema) -> dict[str, str]:
+        if schema == LDAPAutomount.Schema.RFC2307:
+            return {
+                'objectclass': 'nisMap',
+                'rdn': 'nisMapName',
+                'automountMapName': 'nisMapName',
+            }
+        elif schema == LDAPAutomount.Schema.RFC2307bis:
+            return {
+                'objectclass': 'automountMap',
+                'rdn': 'automountMapName',
+                'automountMapName': 'automountMapName',
+            }
+        elif schema == LDAPAutomount.Schema.AD:
+            return {
+                'objectclass': 'nisMap',
+                'rdn': 'cn',
+                'automountMapName': 'nisMapName',
+            }
+        else:
+            raise ValueError(f'Unknown schema: {schema}')
+
+    def add(
+        self,
+    ) -> LDAPAutomountMap:
+        """
+        Create new LDAP automount map.
+
+        :return: Self.
+        :rtype: LDAPAutomountMap
+        """
+        attrs = {
+            'objectclass': self.__attrs['objectclass'],
+            self.__attrs['automountMapName']: self.name,
+        }
+
+        if self.__schema == LDAPAutomount.Schema.AD:
+            attrs['cn'] = self.name
+
+        self._add(attrs)
+        return self
+
+    def key(self, name: str) -> LDAPAutomountKey:
+        """
+        Get automount key object for this map.
+
+        :param name: Automount key name.
+        :type name: str
+        :return: New automount key object.
+        :rtype: LDAPAutomountKey
+        """
+        return LDAPAutomountKey(self.role, name, self, schema=self.__schema)
+
+
+class LDAPAutomountKey(LDAPObject):
+    """
+    LDAP automount key management.
+    """
+
+    def __init__(
+        self,
+        role: LDAP,
+        name: str,
+        map: LDAPAutomountMap,
+        *,
+        schema: LDAPAutomount.Schema = LDAPAutomount.Schema.RFC2307
+    ) -> None:
+        """
+        :param role: LDAP role object.
+        :type role: LDAP
+        :param name: Automount key name.
+        :type name: str
+        :param map: Automount map that is a parent to this key.
+        :type map: LDAPAutomountMap
+        :param schema: LDAP Automount schema, defaults to ``LDAPAutomount.Schema.RFC2307``
+        :type schema: LDAPAutomount.Schema
+        """
+        self.__schema = schema
+        self.__attrs = self.__get_attrs_map(schema)
+        super().__init__(role, f'{self.__attrs["rdn"]}={name}', map)
+        self.name = name
+        self.map = map
+        self.info = ''
+
+    def __get_attrs_map(self, schema: LDAPAutomount.Schema) -> dict[str, str]:
+        if schema == LDAPAutomount.Schema.RFC2307:
+            return {
+                'objectclass': 'nisObject',
+                'rdn': 'cn',
+                'automountKey': 'cn',
+                'automountInformation': 'nisMapEntry',
+            }
+        elif schema == LDAPAutomount.Schema.RFC2307bis:
+            return {
+                'objectclass': 'automount',
+                'rdn': 'automountKey',
+                'automountKey': 'automountKey',
+                'automountInformation': 'automountInformation',
+            }
+        elif schema == LDAPAutomount.Schema.AD:
+            return {
+                'objectclass': 'nisObject',
+                'rdn': 'cn',
+                'automountKey': 'cn',
+                'automountInformation': 'nisMapEntry',
+            }
+        else:
+            raise ValueError(f'Unknown schema: {schema}')
+
+    def add(
+        self,
+        *,
+        info: str | NFSExport | LDAPAutomountMap
+    ) -> LDAPAutomountKey:
+        """
+        Create new LDAP automount key.
+
+        :param info: Automount information.
+        :type info: str | NFSExport | LDAPAutomountMap
+        :return: Self.
+        :rtype: LDAPAutomountKey
+        """
+        info = self.__get_info(info)
+        attrs = {
+            'objectclass': self.__attrs['objectclass'],
+            self.__attrs['automountKey']: self.name,
+            self.__attrs['automountInformation']: info,
+        }
+
+        if self.__schema in [LDAPAutomount.Schema.RFC2307, LDAPAutomount.Schema.AD]:
+            attrs['nisMapName'] = self.map.name
+
+        self._add(attrs)
+        self.info = info
+        return self
+
+    def modify(
+        self,
+        *,
+        info: str | NFSExport | LDAPAutomountMap | LDAP.Flags | None = None,
+    ) -> LDAPAutomountKey:
+        """
+        Modify existing LDAP automount key.
+
+        :param info: Automount information, defaults to ``None``
+        :type info: str | NFSExport | LDAPAutomountMap | LDAP.Flags | None
+        :return: Self.
+        :rtype: LDAPAutomountKey
+        """
+        info = self.__get_info(info)
+        attrs = {
+            self.__attrs['automountInformation']: info,
+        }
+
+        self._set(attrs)
+        self.info = info if info != LDAP.Flags.DELETE else ''
+        return self
+
+    def dump(self) -> str:
+        """
+        Dump the key in the ``automount -m`` format.
+
+        .. code-block:: text
+
+            export1 | -fstype=nfs,rw,sync,no_root_squash nfs.test:/dev/shm/exports/export1
+
+        You can also call ``str(key)`` instead of ``key.dump()``.
+
+        :return: Key information in ``automount -m`` format.
+        :rtype: str
+        """
+        return f'{self.name} | {self.info}'
+
+    def __str__(self) -> str:
+        return self.dump()
+
+    def __get_info(self, info: str | NFSExport | LDAPAutomountMap | LDAP.Flags | None):
+        if isinstance(info, NFSExport):
+            return info.get()
+
+        if isinstance(info, LDAPAutomountMap):
+            return info.name
+
+        return info
